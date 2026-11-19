@@ -1,0 +1,8 @@
+# Local Wrangler variables. Copy to .dev.vars. Do not commit .dev.vars.
+ENVIRONMENT=development
+API_TOKEN=replace-with-a-generated-token
+# ALLOW_PRIVATE_RELAYS=true
+# ALLOW_UNAUTHENTICATED_PUBLISH is ignored while API_TOKEN is set.
+# CORS_ENABLED=true
+# CORS_ORIGINS=http://localhost:3000
+# DEFAULT_PROFILE_RELAYS=wss://relay.example

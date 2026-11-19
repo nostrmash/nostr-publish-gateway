@@ -1,0 +1,15 @@
+name = "nostrmash-nostr-publish-gateway"
+main = "src/index.ts"
+compatibility_date = "2026-11-17"
+compatibility_flags = ["nodejs_compat"]
+
+# Production publishing fails closed until API_TOKEN is set with:
+#   wrangler secret put API_TOKEN
+# Do not put the token in this file.
+[vars]
+ENVIRONMENT = "production"
+
+# Profile caching is optional. Add this binding when you want it, and let Wrangler
+# provision the namespace. Do not commit a namespace id from another account.
+# [[kv_namespaces]]
+# binding = "PROFILES"

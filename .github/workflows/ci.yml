@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Format, lint, typecheck, test, dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12.21.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm exec wrangler deploy --dry-run --outdir dist
+      - name: Reject known copied response text
+        run: |
+          if grep -R -n "Sooner and later you will see great changes made" src tests; then
+            echo "distinctive 404 text is present"
+            exit 1
+          fi
+          if grep -R -n "INVALID_TOKEN" src tests; then
+            echo "plain-text token failure body is present"
+            exit 1
+          fi
