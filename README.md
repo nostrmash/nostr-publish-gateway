@@ -60,8 +60,8 @@ See [docs/API.md](docs/API.md).
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) and [docs/SOURCE_PROVENANCE.md](docs/SOURCE_PROVENANCE.md).
+See [SECURITY.md](SECURITY.md).
 
 ## License
 
-[Unlicense](LICENSE) for the code in this repository. Third-party packages keep their own licenses. The provenance note explains what that dedication does not cover.
+[Unlicense](LICENSE) for the code in this repository. Third-party packages keep their own licenses.
