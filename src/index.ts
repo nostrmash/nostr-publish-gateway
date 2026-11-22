@@ -1,5 +1,6 @@
 import {
   applyCors,
+  assertHealthProbe,
   assertPublishAuth,
   authMode,
   privateRelaysAllowed,
@@ -36,6 +37,18 @@ const MAX_PROFILE_RELAYS = 4;
 
 const breakers = createCircuitBreaker();
 const limiter = createRateLimiter();
+const PROBE_CONCURRENCY = 4;
+
+interface ProbeCache {
+  key: string;
+  expiresAt: number;
+  status: number;
+  body: Record<string, unknown>;
+}
+
+let probeCache: ProbeCache | null = null;
+let probeInflight: { key: string; promise: Promise<ProbeCache> } | null = null;
+let probeHits: number[] = [];
 
 export interface HandlerDependencies {
   webSocket?: RelaySocketConstructor;
@@ -47,6 +60,9 @@ export interface HandlerDependencies {
 export function resetRuntimeState(): void {
   breakers.reset();
   limiter.reset();
+  probeCache = null;
+  probeInflight = null;
+  probeHits = [];
 }
 
 function routePath(request: Request): string {
@@ -129,11 +145,60 @@ function enforceRateLimit(request: Request, env: GatewayEnv, deps: HandlerDepend
   }
 }
 
+function probeSetting(value: string | undefined, fallback: number, max: number): number {
+  const raw = value?.trim() ?? "";
+  if (!/^\d+$/.test(raw)) return fallback;
+  return Math.min(max, Number(raw));
+}
+
+function requiredReachable(total: number, env: GatewayEnv): number | null {
+  const count = env.PROBE_MIN_REACHABLE?.trim() ?? "";
+  if (count !== "") {
+    if (!/^[1-9]\d*$/.test(count)) return null;
+    return Math.min(total, Number(count));
+  }
+  const percent = env.PROBE_MIN_PERCENT?.trim() ?? "";
+  if (percent === "") return total;
+  if (!/^(100|[1-9][0-9]?)$/.test(percent)) return null;
+  return Math.max(1, Math.ceil((total * Number(percent)) / 100));
+}
+
+function allowProbe(now: number, env: GatewayEnv): boolean {
+  const limit = Math.max(1, probeSetting(env.HEALTH_PROBE_LIMIT, 30, 1_000));
+  const windowMs = Math.max(1_000, probeSetting(env.HEALTH_PROBE_WINDOW_MS, 60_000, 3_600_000));
+  probeHits = probeHits.filter((at) => now - at < windowMs);
+  if (probeHits.length >= limit) return false;
+  probeHits.push(now);
+  return true;
+}
+
+async function probeLimited(
+  relays: string[],
+  timeoutMs: number,
+  Socket: RelaySocketConstructor,
+): Promise<boolean[]> {
+  const results = new Array<boolean>(relays.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < relays.length) {
+      const index = next;
+      next += 1;
+      const relay = relays[index];
+      results[index] = relay ? await probeRelay(relay, timeoutMs, Socket) : false;
+    }
+  };
+  const workers = Math.min(PROBE_CONCURRENCY, relays.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return results;
+}
+
 async function handleDeepHealth(
+  request: Request,
   env: GatewayEnv,
   deps: HandlerDependencies,
   trace: string,
 ): Promise<Response> {
+  await assertHealthProbe(request, env);
   const configured = (env.PROBE_RELAYS ?? "")
     .split(",")
     .map((item) => item.trim())
@@ -150,15 +215,41 @@ async function handleDeepHealth(
     }
     throw error;
   }
-  const timeoutMs = Math.min(positiveInt(env.PUBLISH_ATTEMPT_TIMEOUT_MS, 3_000, 200, 8_000), 3_000);
-  const checks = await Promise.all(
-    relays.map(async (relay) => probeRelay(relay, timeoutMs, deps.webSocket ?? WebSocket)),
-  );
-  const reachable = checks.filter(Boolean).length;
-  if (reachable === 0) {
-    return jsonResponse(503, { status: "down", checked: checks.length, reachable: 0 }, trace);
+  const required = requiredReachable(relays.length, env);
+  if (required === null) {
+    return jsonResponse(503, { status: "misconfigured", code: "probe_threshold_invalid" }, trace);
   }
-  return jsonResponse(200, { status: "ok", checked: checks.length, reachable }, trace);
+  const now = deps.now ?? Date.now;
+  const key = `${relays.join(",")}|${required}`;
+  const ttl = probeSetting(env.HEALTH_PROBE_CACHE_MS, 15_000, 60_000);
+  const clock = now();
+  if (ttl > 0 && probeCache && probeCache.key === key && probeCache.expiresAt > clock) {
+    return jsonResponse(probeCache.status, { ...probeCache.body, cached: true }, trace);
+  }
+  if (!allowProbe(clock, env)) {
+    return jsonResponse(429, { status: "down", code: "rate_limited" }, trace);
+  }
+  if (probeInflight?.key === key) {
+    const shared = await probeInflight.promise;
+    return jsonResponse(shared.status, { ...shared.body, cached: true }, trace);
+  }
+  const timeoutMs = Math.min(positiveInt(env.PUBLISH_ATTEMPT_TIMEOUT_MS, 3_000, 200, 8_000), 3_000);
+  const promise = (async (): Promise<ProbeCache> => {
+    const checks = await probeLimited(relays, timeoutMs, deps.webSocket ?? WebSocket);
+    const reachable = checks.filter(Boolean).length;
+    const statusName = reachable === 0 ? "down" : reachable >= required ? "healthy" : "degraded";
+    const status = statusName === "down" ? 503 : 200;
+    const body = { status: statusName, checked: checks.length, reachable, required };
+    return { key, expiresAt: clock + ttl, status, body };
+  })();
+  probeInflight = { key, promise };
+  try {
+    const result = await promise;
+    if (ttl > 0) probeCache = result;
+    return jsonResponse(result.status, { ...result.body, cached: false }, trace);
+  } finally {
+    if (probeInflight?.promise === promise) probeInflight = null;
+  }
 }
 
 async function publishOne(
@@ -310,7 +401,7 @@ export async function handleFetch(
       );
     }
     if (request.method === "GET" && path === "/health/deep") {
-      return applyCors(request, await handleDeepHealth(env, deps, trace), env);
+      return applyCors(request, await handleDeepHealth(request, env, deps, trace), env);
     }
     const publishing =
       request.method === "POST" &&

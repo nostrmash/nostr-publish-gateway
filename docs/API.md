@@ -31,13 +31,15 @@ Does not contact relays.
 
 ## GET /health/deep
 
-Optional relay handshake. It is unauthenticated, like `/health`, and it does not publish an event.
+Optional relay handshake. It does not publish an event and it does not accept the publish API token.
+
+In production, send `Authorization: Bearer` with `HEALTH_PROBE_TOKEN`. Development and test allow the route only when that token is unset. A missing production token is HTTP 503 `probe_auth_not_configured`. A wrong token is HTTP 401 and does not open a relay.
 
 Set `PROBE_RELAYS` to a comma-separated list of relay URLs. The same URL rules as publishing apply. Without that list the route is HTTP 503 `probe_relays_missing`.
 
-Each relay is opened and closed. The wait is the smaller of `PUBLISH_ATTEMPT_TIMEOUT_MS` and 3000 milliseconds. HTTP 200 means at least one socket opened. HTTP 503 `down` means none did. The body reports counts only, not the relay URLs.
+Each relay is opened and closed. At most four relays are opened at once. The wait is the smaller of `PUBLISH_ATTEMPT_TIMEOUT_MS` and 3000 milliseconds. `healthy` means the threshold is met. `degraded` means at least one relay opened and the threshold was not met. `down` means none opened. The default threshold is every configured relay. Set `PROBE_MIN_REACHABLE` or `PROBE_MIN_PERCENT` to change it. The body reports counts only, not the relay URLs.
 
-Relay acceptance of a published event is a separate check and is not performed here.
+The limit and the short result cache are per isolate, not global across Cloudflare. Relay acceptance of a published event is a separate check and is not performed here.
 
 ## POST /publish and POST /
 
