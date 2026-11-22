@@ -29,6 +29,16 @@ Does not contact relays.
 
 `auth` is `token`, `open`, or `misconfigured`.
 
+## GET /health/deep
+
+Optional relay handshake. It is unauthenticated, like `/health`, and it does not publish an event.
+
+Set `PROBE_RELAYS` to a comma-separated list of relay URLs. The same URL rules as publishing apply. Without that list the route is HTTP 503 `probe_relays_missing`.
+
+Each relay is opened and closed. The wait is the smaller of `PUBLISH_ATTEMPT_TIMEOUT_MS` and 3000 milliseconds. HTTP 200 means at least one socket opened. HTTP 503 `down` means none did. The body reports counts only, not the relay URLs.
+
+Relay acceptance of a published event is a separate check and is not performed here.
+
 ## POST /publish and POST /
 
 Body limit 1,000,000 bytes. At most 12 relays after normalization.

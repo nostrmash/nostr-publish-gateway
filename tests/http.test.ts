@@ -17,6 +17,27 @@ beforeEach(() => {
   FakeSocket.reset();
 });
 
+describe("deep health", () => {
+  it("opens configured probe relays and does not publish an event", async () => {
+    FakeSocket.queue.push((socket) => socket.open());
+    const response = await handleFetch(
+      new Request("https://gateway.example/health/deep"),
+      { ...env, PROBE_RELAYS: "wss://relay.example" },
+      undefined,
+      { webSocket: FakeSocket as unknown as typeof WebSocket },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "ok", reachable: 1, checked: 1 });
+    expect(FakeSocket.created[0]?.sent).toEqual([]);
+  });
+
+  it("is misconfigured until probe relays are set", async () => {
+    const response = await handleFetch(new Request("https://gateway.example/health/deep"), env);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ status: "misconfigured" });
+  });
+});
+
 describe("http auth and limits", () => {
   it("fails closed when production has no token", async () => {
     const response = await handleFetch(publishRequest("https://gateway.example/publish", {}), {
