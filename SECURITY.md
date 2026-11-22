@@ -13,7 +13,7 @@ Report vulnerabilities privately through GitHub security advisories for this rep
 - Logs include the request id, event id, relay, and outcome. They do not include the token, the signature, or event content.
 - CORS is off until `CORS_ENABLED=true` and the request origin is listed in `CORS_ORIGINS`.
 - `/health` does not open relay connections.
-- `/health/deep` opens only the relays listed in `PROBE_RELAYS` and sends no event. Leave `PROBE_RELAYS` unset to keep the probe disabled.
+- `/health/deep` requires `HEALTH_PROBE_TOKEN` in production, opens only the relays listed in `PROBE_RELAYS`, and sends no event. It does not accept `API_TOKEN`. Leave `PROBE_RELAYS` unset to keep the probe disabled. The limit is per isolate.
 
 HTTP 200 is not a delivery guarantee. A result of `accepted` means that relay returned NIP-01 `OK true`, or `OK false` with a duplicate message. `rejected` means the relay refused the event. `timeout` and `connection_failed` mean there was no acknowledgement.
 

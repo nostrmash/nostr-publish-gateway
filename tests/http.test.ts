@@ -27,8 +27,66 @@ describe("deep health", () => {
       { webSocket: FakeSocket as unknown as typeof WebSocket },
     );
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ status: "ok", reachable: 1, checked: 1 });
+    expect(await response.json()).toMatchObject({
+      status: "healthy",
+      reachable: 1,
+      checked: 1,
+      required: 1,
+    });
     expect(FakeSocket.created[0]?.sent).toEqual([]);
+    expect(FakeSocket.created.every((socket) => socket.closed)).toBe(true);
+  });
+
+  it("rejects unauthenticated production probes before opening a relay", async () => {
+    const response = await handleFetch(
+      new Request("https://gateway.example/health/deep"),
+      { ENVIRONMENT: "production", PROBE_RELAYS: "wss://relay.example" },
+      undefined,
+      { webSocket: FakeSocket as unknown as typeof WebSocket },
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "probe_auth_not_configured" });
+    expect(FakeSocket.created).toEqual([]);
+    const health = await handleFetch(new Request("https://gateway.example/health"), {
+      ENVIRONMENT: "production",
+    });
+    expect(health.status).toBe(200);
+  });
+
+  it("rejects a wrong health token and reports partial relay availability", async () => {
+    const denied = await handleFetch(
+      new Request("https://gateway.example/health/deep", {
+        headers: { authorization: "Bearer wrong" },
+      }),
+      { ...env, HEALTH_PROBE_TOKEN: "probe-secret", PROBE_RELAYS: "wss://relay.example" },
+      undefined,
+      { webSocket: FakeSocket as unknown as typeof WebSocket },
+    );
+    expect(denied.status).toBe(401);
+    expect(FakeSocket.created).toEqual([]);
+    FakeSocket.queue.push((socket) => socket.open());
+    FakeSocket.queue.push((socket) => socket.emit("error", new Event("error")));
+    const partial = await handleFetch(
+      new Request("https://gateway.example/health/deep", {
+        headers: { authorization: "Bearer probe-secret" },
+      }),
+      {
+        ...env,
+        HEALTH_PROBE_TOKEN: "probe-secret",
+        PROBE_RELAYS: "wss://one.example,wss://two.example",
+      },
+      undefined,
+      { webSocket: FakeSocket as unknown as typeof WebSocket },
+    );
+    expect(partial.status).toBe(200);
+    expect(await partial.json()).toMatchObject({
+      status: "degraded",
+      checked: 2,
+      reachable: 1,
+      required: 2,
+    });
+    expect(FakeSocket.created.every((socket) => socket.closed)).toBe(true);
+    expect(FakeSocket.created.every((socket) => socket.sent.length === 0)).toBe(true);
   });
 
   it("is misconfigured until probe relays are set", async () => {
