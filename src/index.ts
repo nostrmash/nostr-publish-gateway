@@ -21,6 +21,7 @@ import { normalizeRelayList } from "./relay/address";
 import { createCircuitBreaker, createRateLimiter, positiveInt } from "./relay/circuit";
 import {
   POLICIES,
+  probeRelay,
   publishEvent,
   type PublishPolicy,
   type RelaySocketConstructor,
@@ -126,6 +127,38 @@ function enforceRateLimit(request: Request, env: GatewayEnv, deps: HandlerDepend
       decision.retryAfterSeconds,
     );
   }
+}
+
+async function handleDeepHealth(
+  env: GatewayEnv,
+  deps: HandlerDependencies,
+  trace: string,
+): Promise<Response> {
+  const configured = (env.PROBE_RELAYS ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  if (configured.length === 0) {
+    return jsonResponse(503, { status: "misconfigured", code: "probe_relays_missing" }, trace);
+  }
+  let relays: string[];
+  try {
+    relays = relaysFrom(configured, env, MAX_RELAYS);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      return jsonResponse(503, { status: "misconfigured", code: error.code }, trace);
+    }
+    throw error;
+  }
+  const timeoutMs = Math.min(positiveInt(env.PUBLISH_ATTEMPT_TIMEOUT_MS, 3_000, 200, 8_000), 3_000);
+  const checks = await Promise.all(
+    relays.map(async (relay) => probeRelay(relay, timeoutMs, deps.webSocket ?? WebSocket)),
+  );
+  const reachable = checks.filter(Boolean).length;
+  if (reachable === 0) {
+    return jsonResponse(503, { status: "down", checked: checks.length, reachable: 0 }, trace);
+  }
+  return jsonResponse(200, { status: "ok", checked: checks.length, reachable }, trace);
 }
 
 async function publishOne(
@@ -275,6 +308,9 @@ export async function handleFetch(
         jsonResponse(200, { status: "ok", auth: mode, environment: runtimeName(env) }, trace),
         env,
       );
+    }
+    if (request.method === "GET" && path === "/health/deep") {
+      return applyCors(request, await handleDeepHealth(env, deps, trace), env);
     }
     const publishing =
       request.method === "POST" &&

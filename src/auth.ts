@@ -13,6 +13,7 @@ export interface GatewayEnv {
   RATE_LIMIT_REQUESTS?: string;
   RATE_LIMIT_WINDOW_MS?: string;
   DEFAULT_PROFILE_RELAYS?: string;
+  PROBE_RELAYS?: string;
   PUBLISH_ATTEMPT_TIMEOUT_MS?: string;
   PUBLISH_OVERALL_TIMEOUT_MS?: string;
   PROFILES?: ProfileKv;

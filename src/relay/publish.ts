@@ -89,6 +89,36 @@ async function delay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+export function probeRelay(
+  relay: string,
+  timeoutMs: number,
+  Socket: RelaySocketConstructor,
+): Promise<boolean> {
+  let socket: RelaySocket;
+  try {
+    socket = new Socket(relay);
+  } catch {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (open: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket.close();
+      } catch {
+        /* already closed */
+      }
+      resolve(open);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.addEventListener("open", () => finish(true));
+    socket.addEventListener("error", () => finish(false));
+  });
+}
+
 function publishOnce(
   relay: string,
   event: NostrEvent,
